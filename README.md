@@ -9,16 +9,18 @@ produces:
 - **ACR breast density classification** (A–D) — flags dense tissue that can
   physically mask tumors and cause false negatives
 
-The AI engine is Dr. Ian Pan's open-source **`mammoscreen`** model — see
-[Credits & Acknowledgments](#credits--acknowledgments) below.
+The AI engine is **Dr. Ian Pan's** open-source **`mammoscreen`** model
+([website](https://ianpan.me/) · [Hugging Face model](https://huggingface.co/ianpan/mammoscreen)) —
+see [Credits & Acknowledgments](#credits--acknowledgments) below.
 
 ---
 
 ## Why this model
 
 - **Dual clinical utility** — most open-source medical models only output a
-  binary Normal/Abnormal prediction. `mammoscreen` simultaneously outputs
-  malignancy probability *and* ACR density class (A–D) in a single pass.
+  binary Normal/Abnormal prediction. [`mammoscreen`](https://huggingface.co/ianpan/mammoscreen)
+  simultaneously outputs malignancy probability *and* ACR density class (A–D)
+  in a single pass.
 - **High-quality training data** — trained and validated on the global
   **RSNA Screening Mammography Challenge** dataset (54,000+ images).
   Because it was trained on *screening* data (asymptomatic populations)
@@ -163,7 +165,7 @@ model openly on the Hugging Face Hub:
 
 | | |
 | --- | --- |
-| **Personal website** | [https://ianpan.me](https://ianpan.me) |
+| **Personal website** | [https://ianpan.me/](https://ianpan.me/) |
 | **GitHub** | [https://i-pan.github.io](https://i-pan.github.io) |
 | **Hugging Face profile** | [https://huggingface.co/ianpan](https://huggingface.co/ianpan) |
 | **Model card** | [https://huggingface.co/ianpan/mammoscreen](https://huggingface.co/ianpan/mammoscreen) |

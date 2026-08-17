@@ -1,3 +1,29 @@
+"""
+Batch DICOM Mammography Processor (v3)
+=======================================
+
+A local-first clinical AI screening pipeline for digital mammography. It
+processes whole patient study folders of DICOM images and produces, per
+breast, a malignancy probability and an ACR breast density class (A-D),
+saved as a per-patient text report plus per-view PNG previews.
+
+CREDIT / ACKNOWLEDGMENT
+------------------------
+The AI engine behind this pipeline is Dr. Ian Pan's open-source
+"mammoscreen" model, publicly available on the Hugging Face Hub:
+
+    * Personal website : https://ianpan.me
+    * GitHub           : https://i-pan.github.io
+    * Hugging Face     : https://huggingface.co/ianpan
+    * Model card       : https://huggingface.co/ianpan/mammoscreen
+
+The model was trained and validated on the global RSNA Screening
+Mammography Challenge dataset (54,000+ images) and simultaneously outputs
+malignancy probability and ACR breast density classification. It is used
+here under its original open-access terms; see the model card above for the
+exact license and usage terms.
+"""
+
 import os
 import glob
 import pydicom

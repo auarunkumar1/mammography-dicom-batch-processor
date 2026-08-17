@@ -160,4 +160,4 @@ substitute for professional diagnosis.
 
 ## License
 
-Not yet specified.
+[MIT](LICENSE)

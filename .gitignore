@@ -1,0 +1,19 @@
+# Patient data / medical imaging - never commit
+input/
+output/
+model_weights/
+audit_log.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

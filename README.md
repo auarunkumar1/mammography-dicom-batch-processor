@@ -62,16 +62,114 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 
 ## Requirements
 
-- Python 3.8+
-- PyTorch
-- `transformers`
-- `pydicom`
-- `opencv-python`
-- `numpy`
-- `Pillow`
+- **Python 3.10** (recommended — other versions may have compatibility issues)
+- **~500 MB free disk space** for dependencies and model weights
+- **Operating system**: Windows, macOS, or Linux
+
+### Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `torch` / `torchvision` | Deep learning framework |
+| `transformers` (pinned to 4.45.x) | Hugging Face model loading |
+| `timm` | Pre-trained image model architectures |
+| `albumentations` | Image augmentation library |
+| `pydicom` | DICOM file parsing |
+| `opencv-python` | Image processing and breast ROI cropping |
+| `numpy` | Numerical operations |
+| `Pillow` | PNG image saving |
+
+---
+
+## Installation (Step-by-Step)
+
+### Option A: Using Conda (Recommended)
+
+Conda is the easiest way to manage dependencies, especially on Windows where
+some packages (like `tokenizers`) require special build tools.
+
+#### Step 1: Install Miniconda
+
+Download and install Miniconda for your operating system:
+
+- **Windows**: https://docs.conda.io/en/latest/miniconda.html#windows-installers
+- **macOS**: https://docs.conda.io/en/latest/miniconda.html#macosx-installers
+- **Linux**: https://docs.conda.io/en/latest/miniconda.html#linux-installers
+
+After installation, open **Anaconda Prompt** (Windows) or **Terminal** (macOS/Linux).
+
+#### Step 2: Create a dedicated environment
 
 ```bash
-pip install torch transformers pydicom opencv-python numpy Pillow
+conda create -n mammo python=3.10 -y
+```
+
+#### Step 3: Activate the environment
+
+```bash
+conda activate mammo
+```
+
+> **Important**: Always activate this environment before running the script.
+> You'll see `(mammo)` at the beginning of your command prompt when it's active.
+
+#### Step 4: Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Or install manually:
+
+```bash
+pip install torch torchvision transformers==4.45.2 timm albumentations pydicom opencv-python numpy Pillow
+```
+
+> **Note**: `transformers` is pinned to version 4.45.2 for compatibility with
+> the mammoscreen model. Newer versions (5.x) may cause errors.
+
+#### Step 5: Verify installation
+
+```bash
+python -c "import torch; import transformers; import timm; import albumentations; print('All dependencies installed successfully!')"
+```
+
+You should see: `All dependencies installed successfully!`
+
+---
+
+### Option B: Using pip (Alternative)
+
+If you prefer not to use conda, you can use pip directly:
+
+```bash
+# Create a virtual environment (optional but recommended)
+python -m venv mammo-env
+
+# Activate it
+# Windows:
+mammo-env\Scripts\activate
+# macOS/Linux:
+source mammo-env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+> **Windows users**: If you encounter errors building `tokenizers` from source,
+> make sure you have **Microsoft Visual C++ Build Tools** installed:
+> https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+---
+
+### Option C: Using Docker (Advanced)
+
+For reproducible environments across different machines:
+
+```bash
+docker run -it --rm -v $(pwd):/app -w /app python:3.10-slim bash
+pip install -r requirements.txt
+python batch-dicom-processor-v3.py
 ```
 
 ---
@@ -91,9 +189,16 @@ input/
     └── ...
 ```
 
-### 2. Run
+> **Tip**: Folder names should not contain any patient-identifying information.
+> Use anonymized identifiers like `patient-001`, `study-A`, etc.
+
+### 2. Run the processor
 
 ```bash
+# Make sure the mammo environment is active
+conda activate mammo
+
+# Run the processor
 python batch-dicom-processor-v3.py
 ```
 
@@ -104,19 +209,25 @@ offline**. For strict offline deployment (e.g. a mobile van), add
 
 The script automatically uses a CUDA GPU when available and falls back to CPU.
 
----
+### 3. Check results
 
-## Output
+Results are saved in the `output/` folder, organized by patient ID:
 
 ```
 output/
 └── 28-n/
-    ├── Study_Report_28-n.txt
-    ├── study_01_L_CC.png
-    └── study_02_R_MLO.png
+    ├── Study_Report_28-n.txt    # AI analysis report
+    ├── study_01_L_CC.png        # Left breast, CC view
+    └── study_02_R_MLO.png       # Right breast, MLO view
 ```
 
-Example report:
+---
+
+## Output
+
+### Report Format
+
+Each patient folder contains a text report with AI predictions:
 
 ```
 === CLINICAL AI MAMMOGRAPHY STUDY REPORT ===
@@ -133,9 +244,62 @@ Treat this result as lower-confidence than a true two-view study.
 --------------------------------------------
 ```
 
-A `WARNING` line is added to the report when some DICOM files failed to
-process, and a per-folder entry is appended to `audit_log.txt` cross-checking
-the folder name against the internal `PatientID` tags found in its files.
+### Understanding the Results
+
+- **Cancer Probability**: Percentage score (0-100%) indicating likelihood of
+  malignancy. Values >50% are flagged as "Suspicious/Malignant".
+- **Breast Density**: ACR classification from A (fatty) to D (dense). Dense
+  breasts (C/D) can mask tumors and may require additional imaging.
+- **Single-view warning**: When only one view is available, the model
+  duplicates it to meet input requirements. Results should be treated as
+  lower-confidence.
+
+### Audit Log
+
+An `audit_log.txt` file is created at the project root to track:
+- Number of distinct PatientIDs found in each folder
+- Warnings if files from different patients appear mixed
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### "No module named 'albumentations'"
+```bash
+pip install albumentations
+```
+
+#### "No module named 'timm'"
+```bash
+pip install timm
+```
+
+#### "'MammoEnsemble' object has no attribute 'all_tied_weights_keys'"
+This error occurs with `transformers` version 5.x. Use the pinned version:
+```bash
+pip install transformers==4.45.2
+```
+
+#### "Failed to build wheel for tokenizers" (Windows)
+Install Microsoft Visual C++ Build Tools:
+https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+Or use conda instead of pip:
+```bash
+conda create -n mammo python=3.10 -y
+conda activate mammo
+pip install -r requirements.txt
+```
+
+#### CUDA out of memory
+The script will automatically fall back to CPU if GPU memory is insufficient.
+To force CPU mode, set:
+```bash
+export CUDA_VISIBLE_DEVICES=""
+python batch-dicom-processor-v3.py
+```
 
 ---
 

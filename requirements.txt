@@ -1,0 +1,15 @@
+# Core dependencies for Mammography DICOM Batch Processor
+# Tested with Python 3.10
+#
+# Install:  pip install -r requirements.txt
+#   or use the conda setup in README.md
+
+torch>=2.0.0
+torchvision>=0.15.0
+transformers==4.45.2
+timm>=1.0.0
+albumentations>=2.0.0
+pydicom>=2.4.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0

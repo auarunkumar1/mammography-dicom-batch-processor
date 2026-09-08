@@ -51,10 +51,11 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 - **Single-view fallback** — when only one view (CC or MLO) is available, the
   missing view is duplicated to satisfy the model's two-view input, and the
   report explicitly flags the result as **lower confidence**
+- **Consolidated Excel report** — automatically generates `output/mammography_summary.xlsx` aggregating all studies, with bilateral malignancy probabilities, separate breast density columns, patient age/name, and scanned dates clubbed together (plus individual tabs per scan date)
 - **Per-patient text reports** + **per-view PNG previews**
 - **Failure tracking** — files that fail to decode are listed in the report
   instead of being silently dropped
-- **Privacy-first** — only the anonymized folder name is used in any output;
+- **Privacy-first** — folder names are the authoritative study identifier;
   DICOM-internal `PatientID` values are used *only* for an audit-log
   cross-check that catches files copied into the wrong patient folder
 
@@ -74,10 +75,11 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 | `transformers` (pinned to 4.45.x) | Hugging Face model loading |
 | `timm` | Pre-trained image model architectures |
 | `albumentations` | Image augmentation library |
-| `pydicom` | DICOM file parsing |
+| `pydicom` | DICOM file parsing & metadata extraction |
 | `opencv-python` | Image processing and breast ROI cropping |
 | `numpy` | Numerical operations |
 | `Pillow` | PNG image saving |
+| `openpyxl` | Formatted Excel summary export |
 
 ---
 
@@ -122,7 +124,7 @@ pip install -r requirements.txt
 Or install manually:
 
 ```bash
-pip install torch torchvision transformers==4.45.2 timm albumentations pydicom opencv-python numpy Pillow
+pip install torch torchvision transformers==4.45.2 timm albumentations pydicom opencv-python numpy Pillow openpyxl
 ```
 
 > **Note**: `transformers` is pinned to version 4.45.2 for compatibility with
@@ -131,7 +133,7 @@ pip install torch torchvision transformers==4.45.2 timm albumentations pydicom o
 #### Step 5: Verify installation
 
 ```bash
-python -c "import torch; import transformers; import timm; import albumentations; print('All dependencies installed successfully!')"
+python -c "import torch, transformers, timm, albumentations, openpyxl; print('All dependencies installed successfully!')"
 ```
 
 You should see: `All dependencies installed successfully!`
@@ -215,8 +217,9 @@ Results are saved in the `output/` folder, organized by patient ID:
 
 ```
 output/
+├── mammography_summary.xlsx     # Consolidated Excel summary (all studies, clubbed by date)
 └── 28-n/
-    ├── Study_Report_28-n.txt    # AI analysis report
+    ├── Study_Report_28-n.txt    # AI analysis report (with Name, Age, Scanned Date)
     ├── study_01_L_CC.png        # Left breast, CC view
     └── study_02_R_MLO.png       # Right breast, MLO view
 ```
@@ -225,22 +228,48 @@ output/
 
 ## Output
 
-### Report Format
+### 1. Consolidated Excel Summary (`output/mammography_summary.xlsx`)
 
-Each patient folder contains a text report with AI predictions:
+At the conclusion of each batch run, an Excel workbook is automatically generated with all patient studies consolidated and clubbed by **Scanned Date**:
+
+- **Master Sheet (`Mammography Summary`)**: Chronologically sorted by scanned date, separated with visual date group banners showing patient counts per date.
+- **Per-Date Sheets**: When multiple distinct scan dates are present in the batch, individual date tabs (e.g. `2026-07-21`) are also generated for easy day-by-day clinical auditing.
+- **Key Columns**:
+  1. `Scanned Date` — Extracted from DICOM `StudyDate` (fallbacks: `SeriesDate`/`AcquisitionDate`/`ContentDate`)
+  2. `Patient ID` — Study folder identifier
+  3. `Patient Name` — DICOM `PatientName` tag (if present)
+  4. `Age` — Patient age parsed from DICOM header (e.g. `58`), or calculated from birth date
+  5. `Left Malignancy (%)` — Probability score for left breast
+  6. `Left Breast Density` — ACR density class (A: Fatty, B: Scattered, C: Heterogeneous, D: Dense)
+  7. `Left Finding` — Categorical status (`Negative/Benign` vs `Suspicious/Malignant`)
+  8. `Right Malignancy (%)` — Probability score for right breast
+  9. `Right Breast Density` — ACR density class for right breast
+  10. `Right Finding` — Categorical status for right breast
+  11. `Single View Duplication` — Flags if a view was duplicated (Left / Right / None)
+  12. `Flagged (>5%)` — Soft-red highlighted tripwire (`YES`/`NO`) for elevated malignancy risk
+  13. `Status / Notes` — Processing notes and excluded corrupt file alerts
+
+### 2. Per-Patient Text Report
+
+Each patient study folder contains `Study_Report_<patient-id>.txt` with clinical findings:
 
 ```
 === CLINICAL AI MAMMOGRAPHY STUDY REPORT ===
-Patient ID : 28-n
-Folder     : 28-n
+Patient ID   : 28-n
+Folder       : 28-n
+Patient Name : MRS DOE J
+Age          : 58
+Scanned Date : 2026-07-21
 --------------------------------------------
 
 --- LEFT BREAST (L) ---
-Cancer Probability : 96.0% (Suspicious/Malignant)
+Cancer Probability : 0.4% (Negative/Benign)
 Breast Density     : B (Scattered)
-NOTE: Only a single view was available for this side. The second view
-was duplicated to satisfy the model's two-view input requirement.
-Treat this result as lower-confidence than a true two-view study.
+--------------------------------------------
+
+--- RIGHT BREAST (R) ---
+Cancer Probability : 8.1% (Negative/Benign)
+Breast Density     : C (Heterogeneous)
 --------------------------------------------
 ```
 

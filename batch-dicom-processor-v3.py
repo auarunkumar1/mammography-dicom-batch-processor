@@ -26,12 +26,18 @@ exact license and usage terms.
 
 import os
 import glob
+import re
+from datetime import datetime
+from collections import Counter
 import pydicom
 import cv2
 import numpy as np
 from PIL import Image
 import torch
 from transformers import AutoModel
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.path.join(BASE_DIR, 'input')
@@ -40,6 +46,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
 # Audit log lives at the OUTPUT_DIR root, separate from any per-patient report.
 # It never contains full DICOM PatientID strings by design -- see log_id_check().
 AUDIT_LOG_PATH = os.path.join(BASE_DIR, 'audit_log.txt')
+SUMMARY_EXCEL_PATH = os.path.join(OUTPUT_DIR, 'mammography_summary.xlsx')
 
 
 def crop_breast_roi(img):
@@ -151,6 +158,301 @@ def log_id_check(folder_name, internal_pids_seen):
                   f"See {os.path.basename(AUDIT_LOG_PATH)} -- verify no files were copied into the wrong patient folder.")
 
 
+def format_patient_age(age_val, birth_date=None, study_date=None):
+    if age_val:
+        s = str(age_val).strip()
+        m = re.match(r"^0*(\d+)\s*([YyMmDdWw]?)$", s)
+        if m:
+            num, unit = m.groups()
+            unit = unit.upper() if unit else "Y"
+            if num == "0":
+                return "N/A"
+            return num if unit == "Y" else f"{num}{unit}"
+        return s if s != "0" else "N/A"
+    if birth_date and study_date:
+        try:
+            b_dt = datetime.strptime(str(birth_date).strip(), "%Y%m%d")
+            s_dt = datetime.strptime(str(study_date).strip(), "%Y%m%d")
+            age = s_dt.year - b_dt.year - ((s_dt.month, s_dt.day) < (b_dt.month, b_dt.day))
+            return str(age) if age > 0 else "N/A"
+        except Exception:
+            pass
+    return "N/A"
+
+
+def format_patient_name(name_val):
+    if not name_val:
+        return ""
+    s = str(name_val).replace('^', ' ').strip()
+    s = " ".join(s.split())
+    if not s or s.upper() in ("ANONYMOUS", "ANON", "UNKNOWN", "NONE"):
+        return ""
+    return s
+
+
+def format_dicom_date(date_val):
+    if not date_val:
+        return ""
+    s = str(date_val).strip()
+    if len(s) == 8 and s.isdigit():
+        try:
+            dt = datetime.strptime(s, "%Y%m%d")
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return s
+    return s
+
+
+def extract_study_demographics(dcm_files):
+    name = ""
+    age = "N/A"
+    scan_date = "Unknown Date"
+
+    for f in dcm_files:
+        try:
+            ds = pydicom.dcmread(f, stop_before_pixels=True)
+            if not name:
+                p_name = ds.get('PatientName', None)
+                if p_name:
+                    name = format_patient_name(p_name)
+            if age == "N/A":
+                p_age = ds.get('PatientAge', None)
+                b_date = ds.get('PatientBirthDate', None)
+                s_date = ds.get('StudyDate', None)
+                cleaned_age = format_patient_age(p_age, b_date, s_date)
+                if cleaned_age and cleaned_age != "N/A":
+                    age = cleaned_age
+            if scan_date == "Unknown Date":
+                for date_tag in ['StudyDate', 'SeriesDate', 'AcquisitionDate', 'ContentDate']:
+                    d_val = ds.get(date_tag, None)
+                    if d_val:
+                        cleaned_date = format_dicom_date(d_val)
+                        if cleaned_date:
+                            scan_date = cleaned_date
+                            break
+        except Exception:
+            continue
+    return name, age, scan_date
+
+
+def export_to_excel(study_records, excel_path):
+    if not study_records:
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Mammography Summary"
+    ws.views.sheetView[0].showGridLines = True
+
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    fill_header = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+
+    font_date_group = Font(name="Calibri", size=11, bold=True, color="1F4E79")
+    fill_date_group = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    font_data = Font(name="Calibri", size=11)
+    font_alert = Font(name="Calibri", size=11, bold=True, color="9C0006")
+    fill_alert = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+    font_warning = Font(name="Calibri", size=11, color="9C6500")
+    fill_warning = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+
+    border_thin = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9")
+    )
+    border_date_group = Border(
+        top=Side(style="medium", color="8EA9DB"),
+        bottom=Side(style="medium", color="8EA9DB")
+    )
+
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_left = Alignment(horizontal="left", vertical="center")
+    align_right = Alignment(horizontal="right", vertical="center")
+
+    headers = [
+        "Scanned Date",
+        "Patient ID",
+        "Patient Name",
+        "Age",
+        "Left Malignancy (%)",
+        "Left Breast Density",
+        "Left Finding",
+        "Right Malignancy (%)",
+        "Right Breast Density",
+        "Right Finding",
+        "Single View Duplication",
+        "Flagged (>5%)",
+        "Status / Notes"
+    ]
+
+    ws.append(headers)
+    ws.row_dimensions[1].height = 26
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center
+
+    def sort_key(rec):
+        d = rec.get("scanned_date", "")
+        date_sort = ("9999-99-99" if not d or "Unknown" in d else d)
+        return (date_sort, rec.get("patient_id", ""))
+
+    def apply_data_row(target_ws, r_idx, row_data, l_prob, r_prob, is_flagged):
+        for c_idx, val in enumerate(row_data, 1):
+            c = target_ws.cell(row=r_idx, column=c_idx, value=val)
+            c.font = font_data
+            c.border = border_thin
+
+            if c_idx in (1, 2, 4, 6, 9, 11, 12):
+                c.alignment = align_center
+            elif c_idx in (5, 8):
+                c.alignment = align_right
+            else:
+                c.alignment = align_left
+
+            # Highlight elevated cancer probability (>= 5.0%)
+            if c_idx == 5 and l_prob is not None and l_prob >= 5.0:
+                c.fill = fill_alert
+                c.font = font_alert
+            elif c_idx == 8 and r_prob is not None and r_prob >= 5.0:
+                c.fill = fill_alert
+                c.font = font_alert
+
+            # Highlight Single View duplication
+            if c_idx == 11 and val != "None":
+                c.fill = fill_warning
+                c.font = font_warning
+
+            # Highlight Flagged column
+            if c_idx == 12 and is_flagged:
+                c.fill = fill_alert
+                c.font = font_alert
+        target_ws.row_dimensions[r_idx].height = 20
+
+    def autofit_cols(target_ws):
+        for col in target_ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.coordinate in target_ws.merged_cells:
+                    continue
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            target_ws.column_dimensions[col_letter].width = max(max_len + 3, 13)
+
+    sorted_records = sorted(study_records, key=sort_key)
+    date_counts = Counter(r.get("scanned_date", "Unknown Date") for r in sorted_records)
+
+    current_date = None
+    current_row = 2
+
+    for rec in sorted_records:
+        rec_date = rec.get("scanned_date", "Unknown Date")
+
+        # Insert date group banner when date changes
+        if rec_date != current_date:
+            current_date = rec_date
+            count = date_counts[current_date]
+            banner_text = f"Scanned Date: {current_date}  ({count} stud{'ies' if count > 1 else 'y'})"
+
+            ws.cell(row=current_row, column=1, value=banner_text)
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
+
+            for c in range(1, len(headers) + 1):
+                b_cell = ws.cell(row=current_row, column=c)
+                b_cell.font = font_date_group
+                b_cell.fill = fill_date_group
+                b_cell.border = border_date_group
+                b_cell.alignment = align_left
+            ws.row_dimensions[current_row].height = 22
+            current_row += 1
+
+        left_prob = rec.get("left_prob")
+        right_prob = rec.get("right_prob")
+        left_prob_val = f"{left_prob:.1f}%" if left_prob is not None else "N/A"
+        right_prob_val = f"{right_prob:.1f}%" if right_prob is not None else "N/A"
+        flagged = rec.get("flagged", False)
+
+        row_vals = [
+            rec.get("scanned_date") or "Unknown Date",
+            rec.get("patient_id") or "",
+            rec.get("patient_name") or "N/A",
+            rec.get("patient_age") or "N/A",
+            left_prob_val,
+            rec.get("left_density") or "N/A",
+            rec.get("left_finding") or "N/A",
+            right_prob_val,
+            rec.get("right_density") or "N/A",
+            rec.get("right_finding") or "N/A",
+            rec.get("single_view") or "None",
+            "YES" if flagged else "NO",
+            rec.get("notes") or "OK"
+        ]
+
+        apply_data_row(ws, current_row, row_vals, left_prob, right_prob, flagged)
+        current_row += 1
+
+    ws.freeze_panes = "A2"
+    autofit_cols(ws)
+
+    # If multiple distinct dates exist, also create individual tabs per date
+    if len(date_counts) > 1:
+        for d_key in sorted(date_counts.keys(), key=lambda x: ("9999-99-99" if "Unknown" in x or not x else x)):
+            d_records = [r for r in sorted_records if r.get("scanned_date", "Unknown Date") == d_key]
+            tab_title = re.sub(r'[\\/*?:\[\]]', '_', d_key)[:31]
+            ws_d = wb.create_sheet(title=tab_title)
+            ws_d.views.sheetView[0].showGridLines = True
+
+            ws_d.append(headers)
+            ws_d.row_dimensions[1].height = 26
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws_d.cell(row=1, column=col_idx)
+                cell.font = font_header
+                cell.fill = fill_header
+                cell.alignment = align_center
+
+            for d_row_idx, d_rec in enumerate(d_records, 2):
+                l_prob = d_rec.get("left_prob")
+                r_prob = d_rec.get("right_prob")
+                l_prob_val = f"{l_prob:.1f}%" if l_prob is not None else "N/A"
+                r_prob_val = f"{r_prob:.1f}%" if r_prob is not None else "N/A"
+                d_flagged = d_rec.get("flagged", False)
+
+                d_row_vals = [
+                    d_rec.get("scanned_date") or "Unknown Date",
+                    d_rec.get("patient_id") or "",
+                    d_rec.get("patient_name") or "N/A",
+                    d_rec.get("patient_age") or "N/A",
+                    l_prob_val,
+                    d_rec.get("left_density") or "N/A",
+                    d_rec.get("left_finding") or "N/A",
+                    r_prob_val,
+                    d_rec.get("right_density") or "N/A",
+                    d_rec.get("right_finding") or "N/A",
+                    d_rec.get("single_view") or "None",
+                    "YES" if d_flagged else "NO",
+                    d_rec.get("notes") or "OK"
+                ]
+                apply_data_row(ws_d, d_row_idx, d_row_vals, l_prob, r_prob, d_flagged)
+
+            ws_d.freeze_panes = "A2"
+            autofit_cols(ws_d)
+
+    try:
+        wb.save(excel_path)
+        print(f"\n[EXCEL] Consolidated summary successfully exported to: {excel_path}")
+    except PermissionError:
+        fallback_path = os.path.join(
+            OUTPUT_DIR, f"mammography_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        )
+        wb.save(fallback_path)
+        print(f"\n[WARNING] Could not overwrite {excel_path} (file open elsewhere). Saved to: {fallback_path}")
+
+
 def process_batch():
     patient_folders = [f for f in glob.glob(os.path.join(INPUT_DIR, '*')) if os.path.isdir(f)]
 
@@ -162,6 +464,7 @@ def process_batch():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_mammo_model(device)
+    study_records = []
 
     for folder_idx, patient_dir in enumerate(patient_folders, 1):
         folder_name = os.path.basename(patient_dir)
@@ -179,6 +482,9 @@ def process_batch():
         dcm_files = glob.glob(os.path.join(patient_dir, '*.dcm'))
         if not dcm_files:
             continue
+
+        patient_name, patient_age, scanned_date = extract_study_demographics(dcm_files)
+        print(f"  -> Demographics: Name='{patient_name or 'N/A'}' | Age={patient_age} | Date={scanned_date}")
 
         left_breast = {'cc': None, 'mlo': None}
         right_breast = {'cc': None, 'mlo': None}
@@ -255,12 +561,25 @@ def process_batch():
         txt_filepath = os.path.join(patient_output_dir, f"Study_Report_{patient_id}.txt")
         density_classes = ["A (Fatty)", "B (Scattered)", "C (Heterogeneous)", "D (Dense)"]
 
+        left_prob = None
+        left_density = None
+        left_class = None
+        right_prob = None
+        right_density = None
+        right_class = None
+
         with open(txt_filepath, 'w') as f:
             f.write("=== CLINICAL AI MAMMOGRAPHY STUDY REPORT ===\n")
-            f.write(f"Patient ID : {patient_id}\n")
-            f.write(f"Folder     : {folder_name}\n")
+            f.write(f"Patient ID   : {patient_id}\n")
+            f.write(f"Folder       : {folder_name}\n")
+            if patient_name:
+                f.write(f"Patient Name : {patient_name}\n")
+            if patient_age != "N/A":
+                f.write(f"Age          : {patient_age}\n")
+            if scanned_date != "Unknown Date":
+                f.write(f"Scanned Date : {scanned_date}\n")
             if failed_files:
-                f.write(f"WARNING    : {len(failed_files)} file(s) failed to process and were excluded: "
+                f.write(f"WARNING      : {len(failed_files)} file(s) failed to process and were excluded: "
                          f"{', '.join(failed_files)}\n")
             f.write("--------------------------------------------\n\n")
 
@@ -270,6 +589,15 @@ def process_batch():
 
                 density_idx = output['density'][idx].argmax(0).item()
                 density_class = density_classes[density_idx]
+
+                if "Left" in side_name:
+                    left_prob = cancer_prob
+                    left_density = density_class
+                    left_class = cancer_class
+                elif "Right" in side_name:
+                    right_prob = cancer_prob
+                    right_density = density_class
+                    right_class = cancer_class
 
                 f.write(f"--- {side_name.upper()} ---\n")
                 f.write(f"Cancer Probability : {cancer_prob:.1f}% ({cancer_class})\n")
@@ -284,6 +612,25 @@ def process_batch():
                 f.write("--------------------------------------------\n\n")
 
         print(f"  [SUCCESS] Output saved to: output/{folder_name}/")
+
+        study_records.append({
+            "scanned_date": scanned_date,
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "patient_age": patient_age,
+            "left_prob": left_prob,
+            "left_density": left_density,
+            "left_finding": left_class,
+            "right_prob": right_prob,
+            "right_density": right_density,
+            "right_finding": right_class,
+            "single_view": ", ".join(duplicated_sides) if duplicated_sides else "None",
+            "flagged": (left_prob is not None and left_prob >= 5.0) or (right_prob is not None and right_prob >= 5.0),
+            "notes": f"{len(failed_files)} file(s) failed" if failed_files else "OK"
+        })
+
+    if study_records:
+        export_to_excel(study_records, SUMMARY_EXCEL_PATH)
 
 
 if __name__ == "__main__":

@@ -17,3 +17,4 @@ env/
 Thumbs.db
 .idea/
 .vscode/
+.codegraph/

@@ -66,9 +66,11 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 
 ## Requirements
 
-- **Python 3.10** (recommended — other versions may have compatibility issues)
+- **Python 3.10 (recommended)** — newer Python versions may lack prebuilt wheels for some dependencies (e.g. `tokenizers`) and can cause install/build issues.
 - **~500 MB free disk space** for dependencies and model weights
 - **Operating system**: Windows, macOS, or Linux
+
+> **Environment recommendation:** On Linux, prefer **`uv`** or **conda** over a plain `venv`. `uv`/conda make it easy to install and pin Python 3.10 and pull prebuilt wheels; plain `venv` uses whatever system Python is installed and can hit build/compiler issues on newer Python versions. On Windows, conda is the easiest option.
 
 ### Dependencies
 
@@ -183,7 +185,9 @@ You should see: `All dependencies installed successfully!`
 
 ---
 
-### Option C: Using standard `venv` & `pip` (Requires Python 3.10)
+### Option C: Using standard `venv` & `pip` (Not recommended on Linux)
+
+> Use this only if you already have **Python 3.10** installed. On Linux, prefer Option A (`uv`) or Option B (conda) to avoid system-Python and wheel/build issues.
 
 If your system already has Python 3.10 installed:
 

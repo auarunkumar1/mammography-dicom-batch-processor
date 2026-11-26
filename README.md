@@ -41,7 +41,8 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 
 ## Features
 
-- **Batch processing** of patient study folders (`input/<patient-id>/*.dcm`)
+- **Bulk DICOM ingestion** — drop a flat PACS/workstation export (or mixed/nested folder) into `input/` and the processor auto-segregates files into distinct patient studies by DICOM metadata (`StudyInstanceUID`, `PatientID`, `StudyDate`)
+- **Backward-compatible folder mode** — pre-organized `input/<patient-id>/*.dcm` study folders still work exactly as before
 - **View/laterality detection** — CC/MLO and left/right are read from DICOM
   metadata (`ViewPosition`, `ImageLaterality`, `SeriesDescription`), with safe
   `UNK` handling: unknown views are still saved as PNG previews but excluded
@@ -53,6 +54,8 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
   report explicitly flags the result as **lower confidence**
 - **Consolidated Excel report** — automatically generates `output/mammography_summary.xlsx` aggregating all studies, with bilateral malignancy probabilities, separate breast density columns, patient age/name, and scanned dates clubbed together (plus individual tabs per scan date)
 - **Per-patient text reports** + **per-view PNG previews**
+- **Professional PDF reports** — flagged patients (>5% malignancy risk) get high-resolution 4-view clinical PDF reports, plus a consolidated flagged-patients PDF
+- **CLI controls** — `--input-dir`, `--output-dir`, `--start-date`, `--end-date`, `--organize-input`, `--device`, `--skip-pdf`
 - **Failure tracking** — files that fail to decode are listed in the report
   instead of being silently dropped
 - **Privacy-first** — folder names are the authoritative study identifier;
@@ -80,15 +83,55 @@ see [Credits & Acknowledgments](#credits--acknowledgments) below.
 | `numpy` | Numerical operations |
 | `Pillow` | PNG image saving |
 | `openpyxl` | Formatted Excel summary export |
+| `reportlab` | Professional PDF report rendering |
+| `pypdf` | Consolidated multi-patient PDF merging |
 
 ---
 
 ## Installation (Step-by-Step)
 
-### Option A: Using Conda (Recommended)
+### Option A: Using `uv` (Recommended for Linux & macOS — Fast & Clean)
 
-Conda is the easiest way to manage dependencies, especially on Windows where
-some packages (like `tokenizers`) require special build tools.
+[`uv`](https://github.com/astral-sh/uv) is an extremely fast, standalone Python package and environment manager. It automatically downloads and manages a dedicated **Python 3.10** runtime in your user directory without needing root (`sudo`) access and without modifying your system Python. All dependencies install directly from pre-built wheels in seconds (no C/Rust compilers required).
+
+#### Step 1: Install `uv`
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.local/bin/env
+```
+
+#### Step 2: Create a Python 3.10 virtual environment
+
+From the project root:
+
+```bash
+uv venv --python 3.10 mammo
+```
+
+#### Step 3: Activate the environment
+
+```bash
+source mammo/bin/activate
+```
+
+#### Step 4: Install dependencies
+
+```bash
+uv pip install -r requirements.txt
+```
+
+#### Step 5: Verify installation
+
+```bash
+python -c "import torch, transformers, timm, albumentations, openpyxl; print('All dependencies installed successfully!')"
+```
+
+---
+
+### Option B: Using Conda (Recommended for Windows)
+
+Conda is the easiest way to manage dependencies on Windows, where some packages (like `tokenizers`) require special build tools.
 
 #### Step 1: Install Miniconda
 
@@ -124,7 +167,7 @@ pip install -r requirements.txt
 Or install manually:
 
 ```bash
-pip install torch torchvision transformers==4.45.2 timm albumentations pydicom opencv-python numpy Pillow openpyxl
+pip install torch torchvision transformers==4.45.2 timm albumentations pydicom opencv-python numpy Pillow openpyxl reportlab pypdf
 ```
 
 > **Note**: `transformers` is pinned to version 4.45.2 for compatibility with
@@ -140,48 +183,57 @@ You should see: `All dependencies installed successfully!`
 
 ---
 
-### Option B: Using pip (Alternative)
+### Option C: Using standard `venv` & `pip` (Requires Python 3.10)
 
-If you prefer not to use conda, you can use pip directly:
+If your system already has Python 3.10 installed:
 
 ```bash
-# Create a virtual environment (optional but recommended)
-python -m venv mammo-env
+# Create a virtual environment
+python3.10 -m venv mammo
 
 # Activate it
 # Windows:
-mammo-env\Scripts\activate
+mammo\Scripts\activate
 # macOS/Linux:
-source mammo-env/bin/activate
+source mammo/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Windows users**: If you encounter errors building `tokenizers` from source,
-> make sure you have **Microsoft Visual C++ Build Tools** installed:
-> https://visualstudio.microsoft.com/visual-cpp-build-tools/
-
 ---
 
-### Option C: Using Docker (Advanced)
+### Option D: Using Docker (Advanced)
 
 For reproducible environments across different machines:
 
 ```bash
 docker run -it --rm -v $(pwd):/app -w /app python:3.10-slim bash
 pip install -r requirements.txt
-python batch-dicom-processor-v3.py
+python batch-dicom-processor-v4.py --input-dir ./input --output-dir ./output
 ```
 
 ---
 
 ## Usage
 
-### 1. Organize input
+### 1. Prepare input
 
-Create one subfolder per patient under `input/`, named with an **anonymized**
-identifier, and place that patient's DICOM files inside:
+**Option A — Bulk flat folder (v4, recommended for PACS exports):** place all DICOM
+files directly in `input/` (or point `--input-dir` at any export folder). The
+processor inspects DICOM headers and automatically groups files into distinct
+patient studies.
+
+```
+input/
+├── export_001.dcm
+├── export_002.dcm
+├── export_003.dcm
+└── ...
+```
+
+**Option B — Pre-organized patient folders (backward compatible):** create one
+subfolder per patient/study under `input/`:
 
 ```
 input/
@@ -197,12 +249,37 @@ input/
 ### 2. Run the processor
 
 ```bash
-# Make sure the mammo environment is active
-conda activate mammo
+# Activate the environment
+# conda:  conda activate mammo
+# uv/venv: source mammo/bin/activate
 
-# Run the processor
-python batch-dicom-processor-v3.py
+# v4: bulk import (auto-segregates DICOMs by study metadata)
+python batch-dicom-processor-v4.py --input-dir ./input --output-dir ./output
+
+# Filter by scan date range (YYYY-MM-DD or YYYYMMDD)
+python batch-dicom-processor-v4.py --start-date 2026-01-01 --end-date 2026-01-31
+
+# Physically copy raw DICOMs into segregated input subfolders
+python batch-dicom-processor-v4.py --organize-input
+
+# Force CPU / skip PDF report generation
+python batch-dicom-processor-v4.py --device cpu --skip-pdf
 ```
+
+**v4 CLI options:**
+
+| Flag | Description |
+|------|-------------|
+| `--input-dir` | Input DICOM directory (default: `./input`) |
+| `--output-dir` | Output directory (default: `./output`) |
+| `--start-date` | Include studies on/after this date (`YYYY-MM-DD` or `YYYYMMDD`) |
+| `--end-date` | Include studies on/before this date (`YYYY-MM-DD` or `YYYYMMDD`) |
+| `--organize-input` | Copy raw DICOMs into segregated subfolders inside input dir |
+| `--device` | Inference device: `cuda` or `cpu` (default: auto-detect) |
+| `--skip-pdf` | Skip flagged-patient PDF report generation |
+
+> **v3 compatibility:** `batch-dicom-processor-v3.py` is still included for
+> pre-organized per-patient folder workflows.
 
 On the **first run**, the script downloads the model weights (~244 MB) from the
 Hugging Face Hub and caches them locally; all subsequent runs work **fully
@@ -311,42 +388,53 @@ This error occurs with `transformers` version 5.x. Use the pinned version:
 pip install transformers==4.45.2
 ```
 
-#### "Failed to build wheel for tokenizers" (Windows)
-Install Microsoft Visual C++ Build Tools:
-https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#### "Failed to build wheel for tokenizers"
 
-Or use conda instead of pip:
-```bash
-conda create -n mammo python=3.10 -y
-conda activate mammo
-pip install -r requirements.txt
-```
+- **On Linux**: This usually happens when your environment is using a newer Python version (e.g. 3.12+ or 3.14) that lacks pre-built wheels on PyPI, and a C linker (`cc`) is not installed. To fix, recreate the environment using **Python 3.10** with `uv`:
+  ```bash
+  rm -rf mammo
+  uv venv --python 3.10 mammo
+  source mammo/bin/activate
+  uv pip install -r requirements.txt
+  ```
+- **On Windows**: Install Microsoft Visual C++ Build Tools:
+  https://visualstudio.microsoft.com/visual-cpp-build-tools/
+  
+  Or use Conda instead of pip:
+  ```bash
+  conda create -n mammo python=3.10 -y
+  conda activate mammo
+  pip install -r requirements.txt
+  ```
 
 #### CUDA out of memory
 The script will automatically fall back to CPU if GPU memory is insufficient.
 To force CPU mode, set:
 ```bash
 export CUDA_VISIBLE_DEVICES=""
-python batch-dicom-processor-v3.py
+python batch-dicom-processor-v4.py --device cpu
 ```
 
 ---
 
 ## How it works
 
-1. **Read** — each DICOM is parsed with the model's built-in loader
+1. **Discover** — v4 scans the input path for DICOM files (flat folder, nested
+   tree, or pre-organized patient subfolders). Files are grouped into clinical
+   studies by `StudyInstanceUID` (fallback: `PatientID` + `StudyDate`).
+2. **Read** — each DICOM is parsed with the model's built-in loader
    (windowing / VOI LUT / normalization handled natively).
-2. **Normalize** — pixel data is min-max normalized to 8-bit grayscale.
-3. **Crop** — `crop_breast_roi` isolates the largest connected tissue region,
+3. **Normalize** — pixel data is min-max normalized to 8-bit grayscale.
+4. **Crop** — `crop_breast_roi` isolates the largest connected tissue region,
    removing background dead space and label burns.
-4. **Bucket** — images are sorted into CC/MLO slots per breast from DICOM
+5. **Bucket** — images are sorted into CC/MLO slots per breast from DICOM
    metadata; unknown views are excluded from inference.
-5. **Complete** — missing views are duplicated (and flagged) so every breast
+6. **Complete** — missing views are duplicated (and flagged) so every breast
    has the two-view pair the ensemble expects.
-6. **Infer** — each breast's two-view pair is passed through the model to get
+7. **Infer** — each breast's two-view pair is passed through the model to get
    cancer probability and density class.
-7. **Report** — a per-patient text report and PNG previews are written to
-   `output/`.
+8. **Report** — per-patient text/PNG outputs, consolidated Excel summary, and
+   flagged-patient PDF reports are written to `output/`.
 
 ---
 
